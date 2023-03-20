@@ -383,6 +383,8 @@ scheduler(void)
   
   int ran = 0; // CS 350/550: to solve the 100%-CPU-utilization-when-idling problem
 
+
+
   for(;;){
     // Enable interrupts on this processor.
     sti();
@@ -390,7 +392,9 @@ scheduler(void)
         // Loop over process table looking for process to run.
         acquire(&ptable.lock);
         ran = 0;
-        for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        
+        if(schedWinner == 0){
+            for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
           if(p->state != RUNNABLE)
             continue;
 
@@ -409,7 +413,16 @@ scheduler(void)
           // Process is done running for now.
           // It should have changed its p->state before coming back.
           c->proc = 0;
-    }
+        }
+        }else{
+         // add stride
+         //do ran = 1 or stuck in for loop.
+        }
+        
+        
+        
+        
+        
     release(&ptable.lock);
 
     if (ran == 0){
