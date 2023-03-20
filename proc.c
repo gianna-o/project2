@@ -182,6 +182,24 @@ growproc(int n)
   return 0;
 }
 
+// ADDED BY US
+// Sets up the Stride Scheduler
+// Gets called whenever fork() or exit() do
+void reassign_stride() {
+  struct proc *p;
+  int runningable_procs = 0;
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->state == RUNNING || p->state == RUNNABLE) runningable_procs++;
+  }
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->state == RUNNING || p->state == RUNNABLE) {
+      p->tickets = STRIDE_TOTAL_TICKETS / runningable_procs;
+      p->pass = 0;
+      p->strides = (STRIDE_TOTAL_TICKETS * 10) / p->tickets;
+    }
+  }
+}
+
 // Create a new process copying p as the parent.
 // Sets up stack to return as if from system call.
 // Caller must set state of returned proc to RUNNABLE.
@@ -255,7 +273,7 @@ fork(void)
     yield();
   }
 
-
+  reassign_stride();
   return pid;
 }
 
@@ -325,7 +343,7 @@ exit(void)
     }
     }
 
-
+  reassign_stride();
   sched();
   panic("zombie exit");
 }
@@ -375,15 +393,12 @@ wait(void)
 }
 
 void
-scheduler(void)
-{
+scheduler(void) {
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
   
   int ran = 0; // CS 350/550: to solve the 100%-CPU-utilization-when-idling problem
-
-
 
   for(;;){
     // Enable interrupts on this processor.
@@ -393,30 +408,52 @@ scheduler(void)
         acquire(&ptable.lock);
         ran = 0;
         
-        if(schedWinner == 0){
+        extern int schedWinner;
+        if(schedWinner == 0) { // beign round robin
             for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-          if(p->state != RUNNABLE)
-            continue;
-
-          ran = 1;
+              if(p->state != RUNNABLE) continue;
+              ran = 1;
       
-          // Switch to chosen process.  It is the process's job
-          // to release ptable.lock and then reacquire it
-          // before jumping back to us.
+              // Switch to chosen process.  It is the process's job
+              // to release ptable.lock and then reacquire it
+              // before jumping back to us.
+              c->proc = p;
+              switchuvm(p);
+              p->state = RUNNING;
+
+              swtch(&(c->scheduler), p->context);
+              switchkvm();
+
+              // Process is done running for now.
+              // It should have changed its p->state before coming back.
+              c->proc = 0;
+            }
+        } else { // begin stride
+        //do ran = 1 or stuck in for loop.
+
+          int min_pass = ptable.proc->pass;
+          struct proc * p_sched = ptable.proc;
+          for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+            if (p->pass < min_pass) {
+              min_pass = p->pass;
+              p_sched = p;
+            }
+            else if (p->pass == min_pass) {
+              if (p->pid < p_sched->pid) {
+                p_sched = p;
+              }
+            }
+          }
+          p_sched->pass += p_sched->strides;
+          ran = 1;
           c->proc = p;
           switchuvm(p);
           p->state = RUNNING;
 
           swtch(&(c->scheduler), p->context);
           switchkvm();
-
-          // Process is done running for now.
-          // It should have changed its p->state before coming back.
           c->proc = 0;
-        }
-        }else{
-         // add stride
-         //do ran = 1 or stuck in for loop.
+
         }
         
         
@@ -622,6 +659,12 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+
+// still yet to be correctly implemented :o
+void set_sched(int scheduler) { 
+  
 }
 
 
