@@ -37,6 +37,21 @@ cpuid() {
   return mycpu()-cpus;
 }
 
+void reassign_stride() {
+  struct proc *p;
+  int runningable_procs = 0;
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->state == RUNNING || p->state == RUNNABLE) runningable_procs++;
+  }
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if (p->state == RUNNING || p->state == RUNNABLE) {
+      p->tickets = STRIDE_TOTAL_TICKETS / runningable_procs;
+      p->pass = 0;
+      p->strides = (STRIDE_TOTAL_TICKETS * 10) / p->tickets;
+    }
+  }
+}
+
 // Must be called with interrupts disabled to avoid the caller being
 // rescheduled between reading lapicid and running through the loop.
 struct cpu*
@@ -157,6 +172,8 @@ userinit(void)
   acquire(&ptable.lock);
 
   p->state = RUNNABLE;
+  reassign_stride();
+
 
   release(&ptable.lock);
 }
@@ -185,20 +202,6 @@ growproc(int n)
 // ADDED BY US
 // Sets up the Stride Scheduler
 // Gets called whenever fork() or exit() do
-void reassign_stride() {
-  struct proc *p;
-  int runningable_procs = 0;
-  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
-    if (p->state == RUNNING || p->state == RUNNABLE) runningable_procs++;
-  }
-  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
-    if (p->state == RUNNING || p->state == RUNNABLE) {
-      p->tickets = STRIDE_TOTAL_TICKETS / runningable_procs;
-      p->pass = 0;
-      p->strides = (STRIDE_TOTAL_TICKETS * 10) / p->tickets;
-    }
-  }
-}
 
 // Create a new process copying p as the parent.
 // Sets up stack to return as if from system call.
@@ -273,7 +276,9 @@ fork(void)
     yield();
   }
 
+  acquire(&ptable.lock);
   reassign_stride();
+  release(&ptable.lock);
   return pid;
 }
 
@@ -321,29 +326,31 @@ exit(void)
   curproc->state = ZOMBIE;
 
 
-  int count = 0;
-  struct proc *q;
-  for(q = ptable.proc; q < &ptable.proc[NPROC]; q++){
-      if(q->state == RUNNABLE || q->state == RUNNING)
-        count++;
-    }
-  for(q = ptable.proc; q < &ptable.proc[NPROC]; q++){
-        if(q->state == RUNNABLE || q->state == RUNNING)
-        {
-          q->tickets = (STRIDE_TOTAL_TICKETS/count);
-          if(q->tickets != 0)
-          q->strides = (STRIDE_TOTAL_TICKETS/q->tickets);
-          q->pass = 0;
-        }
-    else
-    {
-      q->tickets = 0;
-      q->strides = 0;
-      q->pass = 0;
-    }
-    }
+  // int count = 0;
+  // struct proc *q;
+  // for(q = ptable.proc; q < &ptable.proc[NPROC]; q++){
+  //     if(q->state == RUNNABLE || q->state == RUNNING)
+  //       count++;
+  //   }
+  // for(q = ptable.proc; q < &ptable.proc[NPROC]; q++){
+  //       if(q->state == RUNNABLE || q->state == RUNNING)
+  //       {
+  //         q->tickets = (STRIDE_TOTAL_TICKETS/count);
+  //         if(q->tickets != 0)
+  //         q->strides = (STRIDE_TOTAL_TICKETS/q->tickets);
+  //         q->pass = 0;
+  //       }
+  //   else
+  //   {
+  //     q->tickets = 0;
+  //     q->strides = 0;
+  //     q->pass = 0;
+  //   }
+  //   }
 
+  // acquire(&ptable.lock);
   reassign_stride();
+  // release(&ptable.lock);
   sched();
   panic("zombie exit");
 }
@@ -392,15 +399,14 @@ wait(void)
   }
 }
 
-void
-scheduler(void) {
-  struct proc *p = myproc();
+void scheduler(void) {
+  struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
   
   int ran = 0; // CS 350/550: to solve the 100%-CPU-utilization-when-idling problem
 
-  for(;;){
+  for(;;) {
     // Enable interrupts on this processor.
     sti();
 
@@ -428,12 +434,19 @@ scheduler(void) {
               // It should have changed its p->state before coming back.
               c->proc = 0;
             }
-        } else { // begin stride
-        //do ran = 1 or stuck in for loop.
+        } 
+        else { // begin stride
+          //do ran = 1 or stuck in for loop.
 
-          int min_pass = ptable.proc->pass;
+          int min_pass = 999999;
           struct proc * p_sched = ptable.proc;
+
+          // for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+          //   if (p->state == RUNNING || p->state == RUNNABLE) runningable_procs++;
+          // }
+
           for (p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+            if (p->state != RUNNING && p->state != RUNNABLE) continue;
             if (p->pass < min_pass) {
               min_pass = p->pass;
               p_sched = p;
@@ -445,12 +458,13 @@ scheduler(void) {
             }
           }
           p_sched->pass += p_sched->strides;
-          ran = 1;
-          c->proc = p;
-          switchuvm(p);
-          p->state = RUNNING;
 
-          swtch(&(c->scheduler), p->context);
+          ran = 1;
+          c->proc = p_sched;
+          switchuvm(p_sched);
+          p_sched->state = RUNNING;
+
+          swtch(&(c->scheduler), p_sched->context);
           switchkvm();
           c->proc = 0;
 
@@ -660,9 +674,9 @@ procdump(void)
 
 
 // still yet to be correctly implemented :o
-void set_sched(int scheduler) { 
+// void set_sched(int scheduler) { 
   
-}
+// }
 
 
 int tickets_owned(int pid)
